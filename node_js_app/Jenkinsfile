@@ -1,0 +1,86 @@
+
+pipeline {
+    agent any   
+
+    parameters {
+        string(name: 'GIT_REPO_URL', defaultValue: 'https://github.com/sriram02k/upgrad-project.git')
+        string(name: 'BRANCH', defaultValue: 'main')
+        string(name: 'APP_HOST', defaultValue: 'ec2-user@10.10.4.42')
+        string(name: 'CONTAINER_NAME', defaultValue: 'node-app')
+    }
+
+    environment {
+        IMAGE_TAG = "${env.BUILD_NUMBER}"       
+        APP_SSH_CREDS = 'app-host-ssh-key'  
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo "Cloning repository ...."
+                git branch: "${params.BRANCH}", url: "${params.GIT_REPO_URL}"
+            }
+        }
+
+        stage('Build and Push to ECR') {
+            steps {
+                script {
+                    echo "Building and pushing Docker image to ECR..."
+
+                    sh '''
+                        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 730335518444.dkr.ecr.us-east-1.amazonaws.com
+                        docker build -t 730335518444.dkr.ecr.us-east-1.amazonaws.com/projectupgrad:nodejsapp${IMAGE_TAG} \
+                            -f /var/lib/jenkins/workspace/nodepplication/result/Dockerfile \
+                            /var/lib/jenkins/workspace/nodepplication/result
+
+                        docker push 730335518444.dkr.ecr.us-east-1.amazonaws.com/projectupgrad:nodejsapp${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to App Host') {
+            steps {
+                script {
+                    echo "Deploying container to app host..."
+                    sshagent (credentials: ['app-host-ssh-key']) {
+                        sh '''
+                            ssh -o StrictHostKeyChecking=no ec2-user@10.10.4.42 "
+                                echo 'Checking OS details:'
+                                cat /etc/os-release
+
+                                echo 'Checking if old container is running...'
+                                if [ \\$(docker ps -q -f name=nodeappcontainer) ]; then
+                                    echo 'Stopping and removing old container...'
+                                    docker stop nodeappcontainer && docker rm nodeappcontainer
+                                else
+                                    echo 'No running container found with name nodeappcontainer'
+                                fi
+
+                                echo 'Pulling latest image from ECR...'
+                                aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 730335518444.dkr.ecr.us-east-1.amazonaws.com
+                                docker pull 730335518444.dkr.ecr.us-east-1.amazonaws.com/projectupgrad:nodejsapp${IMAGE_TAG}
+
+                                echo 'Starting new container...'
+                                docker run -d --name nodeappcontainer 730335518444.dkr.ecr.us-east-1.amazonaws.com/projectupgrad:nodejsapp${IMAGE_TAG}
+
+                                echo 'Deployment completed successfully!'
+                            "
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Build #${env.BUILD_NUMBER} completed successfully!"
+        }
+        failure {
+            echo "Build failed. Please check the logs."
+        }
+    }
+}
+
