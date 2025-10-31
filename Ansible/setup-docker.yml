@@ -1,0 +1,31 @@
+- name: Install Docker 
+  hosts: jenkins,app
+  become: yes
+  tasks:
+    - name: Remove Docker CE repo
+      file:
+        path: /etc/yum.repos.d/docker-ce.repo
+        state: absent
+
+    - name: Clean yum cache
+      command: yum clean all
+
+    - name: Enable Docker in amazon-linux-extras
+      command: amazon-linux-extras enable docker
+
+    - name: Install Docker package
+      yum:
+        name: docker
+        state: present
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
